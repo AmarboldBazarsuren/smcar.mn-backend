@@ -1,122 +1,105 @@
-const encarService = require('../services/encarService');
-const syncService = require('../services/syncService');
 const Vehicle = require('../models/Vehicle');
-const logger = require('../utils/logger');
+const logger  = require('../utils/logger');
 
-// ─────────────────────────────────────────
-// БРЕНД ЖАГСААЛТ
-// ─────────────────────────────────────────
+// GET /api/market/brands
+// Брэнд тус бүрд нийт машин тоо + загваруудыг буцаана
 exports.getBrands = async (req, res) => {
   try {
-    // Эхлээд локал DB-ээс авах
-    const localBrands = await Vehicle.aggregate([
+    const data = await Vehicle.aggregate([
       { $match: { status: 'active' } },
       { $group: { _id: '$brand', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]);
-
-    if (localBrands.length > 0) {
-      return res.json({
-        success: true,
-        data: localBrands.map(b => ({ id: b._id, name: b._id, count: b.count })),
-        source: 'local',
-      });
-    }
-
-    // Хэрэв локал дата байхгүй бол API-аас авах
-    const response = await encarService.getBrands();
-    res.json({ success: true, data: response.data, source: 'api' });
-  } catch (error) {
-    logger.error(`getBrands алдаа: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Брэнд авахад алдаа гарлаа' });
+    res.json({ success: true, data: data.map(d => ({ id: d._id, name: d._id, count: d.count })) });
+  } catch (err) {
+    logger.error(`getBrands алдаа: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Алдаа гарлаа' });
   }
 };
 
-// ─────────────────────────────────────────
-// БРЕНДИЙН ЗАГВАРУУД
-// ─────────────────────────────────────────
-exports.getModelsByBrand = async (req, res) => {
+// GET /api/market/brands/:brand/models
+// Тухайн брэндийн загваруудыг тоотой буцаана
+exports.getModels = async (req, res) => {
   try {
     const { brand } = req.params;
-
-    // Локал DB-ээс авах
-    const localModels = await Vehicle.aggregate([
-      { $match: { brand: new RegExp(brand, 'i'), status: 'active' } },
-      { $group: { _id: '$model', count: { $sum: 1 }, years: { $addToSet: '$year' } } },
+    const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const data = await Vehicle.aggregate([
+      { $match: { status: 'active', brand: new RegExp(`^${escapeRegex(brand)}$`, 'i') } },
+      { $group: { _id: '$model', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
+      { $limit: 30 },
+    ]);
+    res.json({ success: true, data: data.map(d => ({ model: d._id, count: d.count })) });
+  } catch (err) {
+    logger.error(`getModels алдаа: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Алдаа гарлаа' });
+  }
+};
+
+// GET /api/market/brands-with-models
+// Бүх брэнд + тэдгээрийн загварууд нэг дор (Home page-д хэрэглэнэ)
+exports.getBrandsWithModels = async (req, res) => {
+  try {
+    const data = await Vehicle.aggregate([
+      { $match: { status: 'active' } },
+      // Брэнд + загвараар бүлэглэх
+      { $group: { _id: { brand: '$brand', model: '$model' }, count: { $sum: 1 } } },
+      { $sort: { '_id.brand': 1, count: -1 } },
+      // Брэндээр нь цуглуулах
+      {
+        $group: {
+          _id: '$_id.brand',
+          total: { $sum: '$count' },
+          models: {
+            $push: { model: '$_id.model', count: '$count' }
+          }
+        }
+      },
+      { $sort: { total: -1 } },
+      // Top 20 брэнд
+      { $limit: 20 },
     ]);
 
-    if (localModels.length > 0) {
-      return res.json({
-        success: true,
-        data: localModels.map(m => ({
-          id: m._id,
-          name: m._id,
-          count: m.count,
-          years: m.years.sort((a, b) => b - a),
-        })),
-        source: 'local',
-      });
-    }
+    // Загварыг тоогоор эрэмбэлж, top 10-г авна
+    const result = data.map(d => ({
+      brand:  d._id,
+      total:  d.total,
+      models: d.models
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10),
+    }));
 
-    const response = await encarService.getModelsByBrand(brand);
-    res.json({ success: true, data: response.data, source: 'api' });
-  } catch (error) {
-    logger.error(`getModelsByBrand алдаа: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Загвар авахад алдаа гарлаа' });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error(`getBrandsWithModels алдаа: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Алдаа гарлаа' });
   }
 };
 
-// ─────────────────────────────────────────
-// ЗАХЫН СТАТИСТИК
-// ─────────────────────────────────────────
-exports.getMarketStats = async (req, res) => {
-  try {
-    const response = await encarService.getMarketStats();
-    res.json({ success: true, data: response.data });
-  } catch (error) {
-    logger.error(`getMarketStats алдаа: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Статистик авахад алдаа гарлаа' });
-  }
-};
-
-// ─────────────────────────────────────────
-// ГАРААР СИНК ХИЙХ
-// ─────────────────────────────────────────
+// POST /api/market/sync — manual sync trigger
 exports.triggerSync = async (req, res) => {
   try {
+    const syncService = require('../services/syncService');
     if (syncService.isRunning) {
-      return res.status(409).json({
-        success: false,
-        message: 'Синк аль хэдийн ажиллаж байна',
-      });
+      return res.status(409).json({ success: false, message: 'Sync аль хэдийн ажиллаж байна' });
     }
-
-    // Background-д ажиллуулах
-    syncService.runSync('manual').catch(err => {
-      logger.error(`Гараар синк алдаа: ${err.message}`);
-    });
-
-    res.json({
-      success: true,
-      message: 'Синк эхэллээ. Хэдэн минутын дараа шинэ машинууд харагдана.',
-    });
-  } catch (error) {
-    logger.error(`triggerSync алдаа: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Синк эхлүүлэхэд алдаа гарлаа' });
+    syncService.runSync('manual').catch(err => logger.error(`Manual sync алдаа: ${err.message}`));
+    res.json({ success: true, message: 'Sync эхэллээ' });
+  } catch (err) {
+    logger.error(`triggerSync алдаа: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Алдаа гарлаа' });
   }
 };
 
-// ─────────────────────────────────────────
-// СИНКИЙН СТАТУС
-// ─────────────────────────────────────────
+// GET /api/market/sync/status
 exports.getSyncStatus = async (req, res) => {
   try {
-    const status = await syncService.getSyncStatus();
+    const syncService = require('../services/syncService');
+    const status  = await syncService.getSyncStatus();
     const history = await syncService.getSyncHistory(10);
     res.json({ success: true, data: { ...status, history } });
-  } catch (error) {
-    logger.error(`getSyncStatus алдаа: ${error.message}`);
-    res.status(500).json({ success: false, message: 'Статус авахад алдаа гарлаа' });
+  } catch (err) {
+    logger.error(`getSyncStatus алдаа: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Алдаа гарлаа' });
   }
 };
