@@ -1,22 +1,24 @@
 require('dotenv').config();
 
-const express    = require('express');
-const cors       = require('cors');
-const helmet     = require('helmet');
-const morgan     = require('morgan');
-const compression= require('compression');
-const rateLimit  = require('express-rate-limit');
-const path       = require('path');
-const fs         = require('fs');
+const express     = require('express');
+const cors        = require('cors');
+const helmet      = require('helmet');
+const morgan      = require('morgan');
+const compression = require('compression');
+const rateLimit   = require('express-rate-limit');
+const path        = require('path');
+const fs          = require('fs');
 
-const { connectDB, disconnectDB } = require('./config/database');
-const { notFound, errorHandler }  = require('./middleware/errorHandler');
+const { connectDB, disconnectDB }   = require('./config/database');
+const { notFound, errorHandler }    = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
 
-// Routes
+// ─────────────────────────────────────────
+// ROUTES
+// ─────────────────────────────────────────
 const vehicleRoutes = require('./routes/vehicles');
 const marketRoutes  = require('./routes/market');
-const adminRoutes   = require('./routes/admin');
+const adminRoutes   = require('./routes/admin');   // ← нэгтгэсэн admin router
 const imageRoutes   = require('./routes/images');
 
 // Sync service
@@ -32,16 +34,14 @@ if (!fs.existsSync(uploadDir)) {
 }
 
 // ─────────────────────────────────────────
-// APP ҮҮСГЭХ
+// APP
 // ─────────────────────────────────────────
 const app = express();
 
 // ─────────────────────────────────────────
 // MIDDLEWARE
 // ─────────────────────────────────────────
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-}));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -58,9 +58,9 @@ app.use(cors({
       callback(new Error('CORS policy-д тохирохгүй байна'));
     }
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
+  credentials:    true,
 }));
 
 app.use(compression());
@@ -69,11 +69,9 @@ app.use(morgan(':method :url :status :res[content-length] - :response-time ms', 
   stream: {
     write: (message) => {
       const msg = message.trim();
-      if (msg.includes(' 4') || msg.includes(' 5')) {
-        logger.warn(`HTTP ${msg}`);
-      } else {
-        logger.debug(`HTTP ${msg}`);
-      }
+      (msg.includes(' 4') || msg.includes(' 5'))
+        ? logger.warn(`HTTP ${msg}`)
+        : logger.debug(`HTTP ${msg}`);
     },
   },
 }));
@@ -84,11 +82,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // ─────────────────────────────────────────
 // STATIC FILES
 // ─────────────────────────────────────────
-app.use('/uploads', express.static(uploadDir, {
-  maxAge: '7d',
-  etag:   true,
-}));
-
+app.use('/uploads', express.static(uploadDir, { maxAge: '7d', etag: true }));
 logger.info(`Static files: /uploads → ${uploadDir}`);
 
 // ─────────────────────────────────────────
@@ -120,7 +114,7 @@ app.use('/api/admin/', adminLimiter);
 // ─────────────────────────────────────────
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/market',   marketRoutes);
-app.use('/api/admin',    adminRoutes);
+app.use('/api/admin',    adminRoutes);    // ← энэ нэг л мөр хангалттай
 app.use('/api/images',   imageRoutes);
 
 // ─────────────────────────────────────────
@@ -128,7 +122,7 @@ app.use('/api/images',   imageRoutes);
 // ─────────────────────────────────────────
 app.get('/health', (req, res) => {
   const mongoose = require('mongoose');
-  const dbState  = ['disconnected','connected','connecting','disconnecting'];
+  const dbState  = ['disconnected', 'connected', 'connecting', 'disconnecting'];
   res.json({
     success:     true,
     status:      'OK',
@@ -173,8 +167,7 @@ const startServer = async () => {
     const requiredEnv = ['MONGODB_URI', 'JWT_SECRET'];
     const missingEnv  = requiredEnv.filter(k => !process.env[k]);
     if (missingEnv.length > 0) {
-      logger.error(`Шаардлагатай env variable-ууд дутуу байна:`);
-      missingEnv.forEach(k => logger.error(`   → ${k} байхгүй байна`));
+      missingEnv.forEach(k => logger.error(`→ ${k} байхгүй байна`));
       process.exit(1);
     }
 
@@ -193,7 +186,6 @@ const startServer = async () => {
     });
 
     return server;
-
   } catch (error) {
     logger.error(`Сервер эхлүүлэхэд алдаа: ${error.message}`);
     process.exit(1);
