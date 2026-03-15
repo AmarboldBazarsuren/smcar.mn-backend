@@ -1,188 +1,154 @@
 const axios  = require('axios');
+const path   = require('path');
 const logger = require('../utils/logger');
 
-// ══════════════════════════════════════════════════════════════
-// ENCAR.COM PUBLIC API — ШУУД
-// Base URL : https://api.encar.com
-// ══════════════════════════════════════════════════════════════
+// ── Орчуулгын толь бичгийг JSON-оос ачаалах ──
+let T = { brands: {}, models: {}, suffixes: {}, fuel_types: {}, transmissions: {}, body_types: {}, colors: {}, regions: {}, features: {} };
+try {
+  T = require(path.join(process.cwd(), 'carTranslations.json'));
+  logger.info('carTranslations.json амжилттай ачаалагдлаа');
+} catch (e) {
+  logger.warn(`carTranslations.json олдсонгүй: ${e.message}`);
+}
 
-// ── Солонгос → Монгол хөрвүүлэгч maps ──
+// ─────────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────────
 
-const FUEL_MAP = {
-  // Encar raw values
-  '가솔린':       'Gasoline',
-  '디젤':         'Diesel',
-  '전기':         'Electric',
-  '하이브리드':   'Hybrid',
-  'LPG':          'LPG',
-  'lpg':          'LPG',
-  // English codes from API
-  'G':  'Gasoline',
-  'D':  'Diesel',
-  'E':  'Electric',
-  'H':  'Hybrid',
-  'L':  'LPG',
-  'LPI':'LPG',
-  'GH': 'Hybrid',
-  'DH': 'Hybrid',
-  // Sometimes returned as full English
-  'Gasoline': 'Gasoline',
-  'Diesel':   'Diesel',
-  'Electric': 'Electric',
-  'Hybrid':   'Hybrid',
-  'LPG':      'LPG',
-};
+/** Толь бичгээс хайх — exact + case-insensitive */
+function lookup(dict, raw) {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (dict[t]) return dict[t];
+  const l = t.toLowerCase();
+  for (const [k, v] of Object.entries(dict)) {
+    if (k.toLowerCase() === l) return v;
+  }
+  return null;
+}
 
-const TRANS_MAP = {
-  '오토':     'Automatic',
-  '자동':     'Automatic',
-  '수동':     'Manual',
-  '반자동':   'Manual',
-  'A':        'Automatic',
-  'M':        'Manual',
-  'CVT':      'Automatic',
-  'DCT':      'Automatic',
-  'Automatic':'Automatic',
-  'Manual':   'Manual',
-};
+/** Текстийн дотор солонгос үгсийг орлуулах — model/badge дотрох suffix-үүдэд */
+function replaceKoreanWords(text) {
+  if (!text) return text;
+  let result = text;
 
-const BODY_MAP = {
-  '세단':       'Sedan',
-  'SUV':        'SUV',
-  '해치백':     'Hatchback',
-  '왜건':       'Wagon',
-  '쿠페':       'Coupe',
-  '픽업트럭':   'Pickup',
-  '밴':         'Van',
-  '미니밴':     'Minivan',
-  'RV':         'SUV',
-  'MPV':        'Minivan',
-};
+  // 1. Suffixes (스포츠 → Sport, 터보 → Turbo гэх мэт)
+  for (const [ko, en] of Object.entries(T.suffixes || {})) {
+    if (ko.length > 1) {
+      result = result.replace(new RegExp(escapeRegex(ko), 'g'), en);
+    }
+  }
 
-// Korean brand name → English
-const BRAND_MAP = {
-  '기아':   'Kia',
-  '현대':   'Hyundai',
-  '제네시스':'Genesis',
-  '쌍용':   'SsangYong',
-  '르노':   'Renault',
-  '한국GM': 'Chevrolet',
-  '쉐보레': 'Chevrolet',
-  'BMW':    'BMW',
-  '벤츠':   'Mercedes-Benz',
-  '아우디': 'Audi',
-  '폭스바겐':'Volkswagen',
-  '볼보':   'Volvo',
-  '포르쉐': 'Porsche',
-  '렉서스': 'Lexus',
-  '인피니티':'Infiniti',
-  '혼다':   'Honda',
-  '토요타': 'Toyota',
-  '닛산':   'Nissan',
-  '미니':   'Mini',
-  '랜드로버':'Land Rover',
-  '재규어': 'Jaguar',
-  '마세라티':'Maserati',
-  '페라리': 'Ferrari',
-  '람보르기니':'Lamborghini',
-  '포드':   'Ford',
-  '지프':   'Jeep',
-  '크라이슬러':'Chrysler',
-  '캐딜락': 'Cadillac',
-  '링컨':   'Lincoln',
-  '테슬라': 'Tesla',
-};
+  // 2. Fuel type words inside model names (가솔린, 디젤, 하이브리드)
+  for (const [ko, en] of Object.entries(T.fuel_types || {})) {
+    if (/[가-힣]/.test(ko)) {
+      result = result.replace(new RegExp(escapeRegex(ko), 'g'), en);
+    }
+  }
 
-// Нийтлэг Солонгос загварын нэр → Англи
-const MODEL_MAP = {
-  // Kia
-  '카니발':      'Carnival',
-  '올 뉴 카니발':'Carnival',
-  '스포티지':    'Sportage',
-  '쏘렌토':      'Sorento',
-  '모하비':      'Mohave',
-  '스팅어':      'Stinger',
-  'K5':          'K5',
-  'K7':          'K7',
-  'K8':          'K8',
-  'K9':          'K9',
-  '셀토스':      'Seltos',
-  '니로':        'Niro',
-  '레이':        'Ray',
-  '모닝':        'Morning',
-  'EV6':         'EV6',
-  'EV9':         'EV9',
-  // Hyundai
-  '아반떼':      'Avante',
-  '쏘나타':      'Sonata',
-  '그랜저':      'Grandeur',
-  '투싼':        'Tucson',
-  '싼타페':      'Santa Fe',
-  '팰리세이드':  'Palisade',
-  '아이오닉':    'Ioniq',
-  '코나':        'Kona',
-  '베뉴':        'Venue',
-  '스타리아':    'Staria',
-  '넥쏘':        'Nexo',
-  '포터':        'Porter',
-  // Genesis
-  'G70':         'G70',
-  'G80':         'G80',
-  'G90':         'G90',
-  'GV70':        'GV70',
-  'GV80':        'GV80',
-  'GV90':        'GV90',
-  // SsangYong/KGM
-  '티볼리':      'Tivoli',
-  '코란도':      'Korando',
-  '렉스턴':      'Rexton',
-  '무쏘':        'Musso',
-  // Renault
-  'QM6':         'QM6',
-  'SM6':         'SM6',
-  '조에':        'Zoe',
-  // Chevrolet Korea
-  '말리부':      'Malibu',
-  '트레일블레이저':'Trailblazer',
-  '트랙스':      'Trax',
-  '이쿼녹스':    'Equinox',
-  '볼트':        'Bolt',
-};
+  // 3. Region names
+  for (const [ko, en] of Object.entries(T.regions || {})) {
+    result = result.replace(new RegExp(`^${escapeRegex(ko)}$`), en);
+  }
 
-// Safe regex escape
-const escapeRegex = s => (s||'').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return result.trim();
+}
+
+/** Солонгос үсэг агуулж байгаа эсэх */
+function hasKorean(str) {
+  return str && /[가-힣]/.test(str);
+}
+
+/** Brand хөрвүүлэх */
+function mapBrand(raw) {
+  if (!raw) return raw;
+  return lookup(T.brands, raw) || raw.trim();
+}
+
+/** Model хөрвүүлэх — толь → partial → suffix орлуулалт */
+function mapModel(raw) {
+  if (!raw) return raw;
+  const trimmed = raw.trim();
+
+  // 1. Шууд match
+  const direct = lookup(T.models, trimmed);
+  if (direct) return direct;
+
+  // 2. Урт Korean prefix match (e.g. "올 뉴 투싼 가솔린 1.6 터보 2WD")
+  let best = '';
+  let bestLen = 0;
+  for (const [ko, en] of Object.entries(T.models)) {
+    if (hasKorean(ko) && trimmed.startsWith(ko) && ko.length > bestLen) {
+      best = en;
+      bestLen = ko.length;
+    }
+  }
+  if (best) {
+    // Үлдсэн хэсгийг suffix орлуулалтаар цэвэрлэх
+    const rest = trimmed.slice(bestLen).trim();
+    const cleanRest = replaceKoreanWords(rest);
+    return cleanRest ? `${best} ${cleanRest}`.trim() : best;
+  }
+
+  // 3. Contains match
+  for (const [ko, en] of Object.entries(T.models)) {
+    if (hasKorean(ko) && ko.length > 2 && trimmed.includes(ko)) {
+      const cleaned = trimmed.replace(ko, en);
+      return replaceKoreanWords(cleaned);
+    }
+  }
+
+  // 4. Already English — suffix-уудыг л орлуулах
+  if (!hasKorean(trimmed)) return trimmed;
+
+  // 5. Зөвхөн suffix орлуулалт
+  return replaceKoreanWords(trimmed);
+}
+
+/** Badge хөрвүүлэх */
+function mapBadge(raw) {
+  if (!raw) return raw;
+  const trimmed = raw.trim();
+  if (!hasKorean(trimmed)) return trimmed;
+  return replaceKoreanWords(trimmed);
+}
 
 function mapFuel(raw) {
   if (!raw) return null;
-  return FUEL_MAP[raw] || FUEL_MAP[raw?.trim()] || raw;
+  return lookup(T.fuel_types, raw) || null;
 }
 
 function mapTrans(raw) {
   if (!raw) return null;
-  return TRANS_MAP[raw] || TRANS_MAP[raw?.trim()] || raw;
+  return lookup(T.transmissions, raw) || null;
 }
 
 function mapBody(raw) {
   if (!raw) return null;
-  return BODY_MAP[raw] || BODY_MAP[raw?.trim()] || raw;
+  return lookup(T.body_types, raw) || null;
 }
 
-function mapBrand(raw) {
+function mapColor(raw) {
   if (!raw) return raw;
-  return BRAND_MAP[raw?.trim()] || raw;
+  return lookup(T.colors, raw) || (hasKorean(raw) ? replaceKoreanWords(raw) : raw.trim());
 }
 
-function mapModel(raw) {
+function mapRegion(raw) {
   if (!raw) return raw;
-  // Exact match эхлээд
-  if (MODEL_MAP[raw?.trim()]) return MODEL_MAP[raw.trim()];
-  // Partial match
-  for (const [ko, en] of Object.entries(MODEL_MAP)) {
-    if (raw.includes(ko)) return en;
-  }
-  return raw;
+  return lookup(T.regions, raw) || (hasKorean(raw) ? replaceKoreanWords(raw) : raw.trim());
 }
 
+function mapFeatures(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(f => {
+    const s = typeof f === 'string' ? f : (f.name || f.Name || String(f));
+    return lookup(T.features, s) || (hasKorean(s) ? replaceKoreanWords(s) : s);
+  }).filter(Boolean);
+}
+
+const escapeRegex = s => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ════════════════════════════════════════════════════════
 class EncarService {
   constructor() {
     this.client = axios.create({
@@ -190,7 +156,7 @@ class EncarService {
       timeout: 30000,
       headers: {
         'Accept':     'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer':    'https://www.encar.com',
         'Origin':     'https://www.encar.com',
       },
@@ -203,23 +169,42 @@ class EncarService {
         return Promise.reject(err);
       }
     );
-
-    logger.info('Encar.com API эхэллээ');
   }
 
-  // ── Query builder ──
+  _getBrandCode(brand) {
+    const map = {
+      'hyundai': 'HY', 'kia': 'KI', 'genesis': 'GE',
+      'ssangyong': 'SS', 'kgm': 'SS',
+      'renault': 'RN', 'chevrolet': 'GM', 'daewoo': 'DW',
+      'bmw': 'BM', 'mercedes-benz': 'MB', 'mercedes': 'MB', 'benz': 'MB',
+      'audi': 'AU', 'volkswagen': 'VW', 'vw': 'VW',
+      'volvo': 'VO', 'porsche': 'PO',
+      'toyota': 'TY', 'honda': 'HO', 'nissan': 'NS',
+      'lexus': 'LE', 'infiniti': 'IN',
+      'mini': 'MI', 'jeep': 'JP',
+      'land rover': 'LR', 'landrover': 'LR',
+      'tesla': 'TE', 'ford': 'FD',
+      'cadillac': 'CA', 'lincoln': 'LC',
+      'maserati': 'MA', 'ferrari': 'FE',
+      'bentley': 'BE', 'rolls-royce': 'RR',
+      'jaguar': 'JG', 'mazda': 'MZ', 'subaru': 'SB',
+    };
+    return map[(brand || '').toLowerCase().trim()] || null;
+  }
+
+  _getFuelCode(fuel) {
+    const map = { gasoline: 'G', diesel: 'D', electric: 'E', hybrid: 'H', lpg: 'L' };
+    return map[(fuel || '').toLowerCase()] || null;
+  }
+
   _buildQuery(params = {}) {
     const conds = ['And.Hidden.N.'];
-
     if (params.brand) {
       const code = this._getBrandCode(params.brand);
       if (code) conds.push(`_.Manufacturer.${code}.`);
     }
-    if (params.model)    conds.push(`_.ModelGroup.${escapeRegex(params.model)}.`);
     if (params.year_min || params.year_max) {
-      const mn = params.year_min || 1990;
-      const mx = params.year_max || new Date().getFullYear();
-      conds.push(`_.Year.range(${mn}..${mx}).`);
+      conds.push(`_.Year.range(${params.year_min || 1990}..${params.year_max || new Date().getFullYear()}).`);
     }
     if (params.price_min || params.price_max) {
       const mn = params.price_min ? Math.floor(params.price_min / 10000) : 0;
@@ -234,82 +219,51 @@ class EncarService {
       conds.push(`_.Transmission.${params.transmission === 'Automatic' ? 'A' : 'M'}.`);
     }
     if (params.search) {
-      return `(KeywordContain.${encodeURIComponent(params.search)}.)`;
+      return `(KeywordContain.${encodeURIComponent(params.search.trim())}.)`;
     }
     return `(${conds.join('_.')})`;
   }
 
-  _getBrandCode(brand) {
-    const map = {
-      'hyundai':'HY','kia':'KI','genesis':'GE','ssangyong':'SS',
-      'kgm':'SS','samsung':'SM','chevrolet':'GM','bmw':'BM',
-      'mercedes':'MB','mercedes-benz':'MB','benz':'MB','audi':'AU',
-      'toyota':'TY','honda':'HO','nissan':'NS','volkswagen':'VW',
-      'ford':'FD','volvo':'VO','porsche':'PO','lexus':'LE',
-      'infiniti':'IN','mini':'MI','jeep':'JP','land rover':'LR',
-      'landrover':'LR','tesla':'TE','renault':'RN',
-    };
-    return map[(brand||'').toLowerCase().trim()] || null;
-  }
-
-  _getFuelCode(fuel) {
-    const map = { gasoline:'G',diesel:'D',electric:'E',hybrid:'H',lpg:'L' };
-    return map[(fuel||'').toLowerCase()] || null;
-  }
-
-  // ── Машинуудын жагсаалт ──
   async getVehicles(params = {}) {
     try {
-      const limit  = params.limit || 20;
-      const page   = params.page  || 1;
+      const limit  = Math.min(100, params.limit || 20);
+      const page   = params.page || 1;
       const offset = (page - 1) * limit;
       const query  = this._buildQuery(params);
       const sortMap = {
-        '-createdAt':'ModifiedDate','-price':'PriceDesc',
-        'price':'Price','-year':'YearDesc','mileage':'Mileage',
+        '-createdAt': 'ModifiedDate', '-price': 'PriceDesc',
+        'price': 'Price', '-year': 'YearDesc', 'mileage': 'Mileage',
       };
-      const sortField = sortMap[params.sort] || 'ModifiedDate';
 
       const res = await this.client.get('/search/car/list/general', {
-        params: { count: true, q: query, sr: `|${sortField}|${offset}|${limit}` },
+        params: { count: true, q: query, sr: `|${sortMap[params.sort] || 'ModifiedDate'}|${offset}|${limit}` },
       });
-
-      const cars  = res.data?.SearchResults || res.data?.Results || [];
-      const total = res.data?.Count || 0;
 
       return {
         success: true,
         data: {
-          vehicles: cars.map(c => this._transformFromEncar(c)),
+          vehicles: (res.data?.SearchResults || []).map(c => this._transform(c)),
           pagination: {
-            total, page, limit,
-            pages: Math.ceil(total / limit),
-            has_more: offset + limit < total,
+            total: res.data?.Count || 0, page, limit,
+            pages: Math.ceil((res.data?.Count || 0) / limit),
+            has_more: offset + limit < (res.data?.Count || 0),
           },
         },
       };
-    } catch (err) {
-      throw this._handleError(err);
-    }
+    } catch (err) { throw this._handleError(err); }
   }
 
-  // ── Нэг машин ──
   async getVehicleById(id) {
     try {
-      const res = await this.client.get(`/api/car/${id}`, {
-        params: { includeEncarLite: true },
-      });
-      return { success: true, data: this._transformFromEncarDetail(res.data) };
-    } catch (err) {
-      throw this._handleError(err);
-    }
+      const res = await this.client.get(`/api/car/${id}`, { params: { includeEncarLite: true } });
+      return { success: true, data: this._transformDetail(res.data) };
+    } catch (err) { throw this._handleError(err); }
   }
 
-  // ── Бүгдийг batch-аар татах ──
-  async fetchAllVehicles(batchSize = 50) {
-    const all  = [];
-    let offset = 0;
-    let total  = null;
+  async fetchAllVehicles(batchSize = 100) {
+    const all = [];
+    let offset = 0, total = null, consecutiveErrors = 0;
+    const MAX_ERRORS = 3, MAX_VEHICLES = 5000;
 
     logger.info('Encar.com-оос машинуудыг татаж байна...');
 
@@ -318,27 +272,23 @@ class EncarService {
         const res = await this.client.get('/search/car/list/general', {
           params: { count: true, q: '(And.Hidden.N.)', sr: `|ModifiedDate|${offset}|${batchSize}` },
         });
-
         const cars = res.data?.SearchResults || [];
-        if (total === null) total = res.data?.Count || 0;
-
+        if (total === null) { total = res.data?.Count || 0; logger.info(`Нийт ${total} машин.`); }
         if (!cars.length) break;
 
         all.push(...cars);
         offset += batchSize;
+        consecutiveErrors = 0;
 
-        logger.sync.progress(all.length, total);
+        if (all.length % 500 === 0) logger.sync.progress(all.length, total);
+        if (offset >= total || all.length >= MAX_VEHICLES) break;
+        await this._sleep(300);
 
-        if (offset >= total) break;
-        if (all.length >= 2000) {
-          logger.info('2000 хязгаарт хүрлээ');
-          break;
-        }
-
-        await this._sleep(400);
       } catch (err) {
-        logger.error(`Batch алдаа offset=${offset}: ${err.message}`);
-        break;
+        consecutiveErrors++;
+        logger.error(`Batch алдаа offset=${offset}: ${err.message} (${consecutiveErrors}/${MAX_ERRORS})`);
+        if (consecutiveErrors >= MAX_ERRORS) { logger.warn('Хэт олон алдаа. Зогсов.'); break; }
+        await this._sleep(2000 * consecutiveErrors);
       }
     }
 
@@ -346,131 +296,94 @@ class EncarService {
     return all;
   }
 
-  // ══════════════════════════════════════════
-  // TRANSFORM — Encar list item → MongoDB
-  // ══════════════════════════════════════════
-  _transformFromEncar(c) {
-    const imgBase   = 'https://ci.encar.com/carpicture';
-    const photos    = c.Photos || [];
-    const thumb     = photos[0] ? `${imgBase}${photos[0].location}` : null;
-    const images    = photos.map((p, i) => ({
-      url:       `${imgBase}${p.location}`,
-      alt:       `Зураг ${i + 1}`,
-      isPrimary: i === 0,
-    }));
+  // ── Core transform ──
+  _transform(c) {
+    const imgBase = 'https://ci.encar.com/carpicture';
+    const photos  = c.Photos || [];
 
-    // Brand/Model хөрвүүлэх
-    const rawBrand = c.Manufacturer || c.maker || '';
-    const rawModel = c.Model        || c.model || '';
-    const brand    = mapBrand(rawBrand);
-    const model    = mapModel(rawModel);
+    const brand        = mapBrand(c.Manufacturer || c.maker || '');
+    const model        = mapModel(c.Model || c.model || c.ModelGroup || '');
+    const badge        = mapBadge(c.Badge || c.badge || null);
+    const fuelType     = mapFuel(c.FuelType || c.fueltype || c.Fuel || '');
+    const transmission = mapTrans(c.Transmission || c.transmission || c.Gear || '');
+    const bodyType     = mapBody(c.BodyType || c.bodyType || c.Category || '');
+    const color        = mapColor(c.Color || c.color || '');
+    const location     = mapRegion(c.OfficeCityState || c.Region || c.region || '');
 
-    // Fuel/Trans хөрвүүлэх — олон боломжит field нэрийг шалгана
-    const rawFuel  = c.FuelType  || c.fueltype  || c.fuel_type  || c.Fuel  || '';
-    const rawTrans = c.Transmission || c.transmission || c.trans || '';
-
-    const fuelType    = mapFuel(rawFuel);
-    const transmission = mapTrans(rawTrans);
-
-    // Жил — 202211 гэх маягаар ирж болно
     let year = parseInt(c.Year) || 0;
-    if (year > 10000) year = Math.floor(year / 100); // 202211 → 2022
+    if (year > 100000) year = Math.floor(year / 100);
+    else if (year > 10000) year = Math.floor(year / 100);
 
     return {
-      encarId:       String(c.Id || c.id || ''),
-      title:         `${brand} ${model} ${year}`.trim(),
+      encarId:        String(c.Id || c.id || ''),
+      title:          [brand, model, badge, year].filter(Boolean).join(' ').trim(),
       brand,
       model,
-      badge:         c.Badge || c.badge || null,
+      badge,
       year,
-
-      price:         (c.Price || 0) * 10000,
-      originalPrice: null,
-
-      mileage:       c.Mileage    || c.mileage    || 0,
+      price:          (c.Price || 0) * 10000,
+      originalPrice:  null,
+      mileage:        c.Mileage || c.mileage || 0,
       fuelType,
       transmission,
-      engineSize:    c.Displacement ? `${c.Displacement}cc` : (c.displacement ? `${c.displacement}cc` : null),
-      bodyType:      mapBody(c.BodyType || c.bodyType || c.body_type || ''),
-      color:         c.Color      || c.color      || null,
-      doors:         c.Door       || c.door       || null,
-      seats:         c.Seat       || c.seat       || null,
-
-      location:      c.OfficeCityState || c.Region || c.region || null,
-
+      engineSize:     c.Displacement ? `${c.Displacement}cc` : null,
+      bodyType,
+      color,
+      doors:          c.Door  || c.door  || null,
+      seats:          c.Seat  || c.seat  || null,
+      location,
       dealer: {
         id:      String(c.OfficerId || ''),
-        name:    c.OfficeName  || c.officeName || null,
+        name:    c.OfficeName  || null,
         phone:   c.OfficeTelNo || null,
-        address: c.OfficeCityState || null,
+        address: location,
       },
-
-      images,
-      thumbnailUrl: thumb,
-
-      features:    [],
-      description: `${brand} ${model} ${year}`.trim(),
-
+      images: photos.map((p, i) => ({
+        url: `${imgBase}${p.location}`, alt: `Image ${i + 1}`, isPrimary: i === 0,
+      })),
+      thumbnailUrl:   photos[0] ? `${imgBase}${photos[0].location}` : null,
+      features:       [],
+      description:    [brand, model, badge, year].filter(Boolean).join(' ').trim(),
       history: {
         accidents:      c.Accident     || 0,
         owners:         c.OwnerChanged || 1,
         serviceRecords: false,
       },
-
-      viewCount:      c.ViewCount  || 0,
-      status:        'active',
+      viewCount:      c.ViewCount || 0,
+      status:         'active',
       lastSyncedAt:   new Date(),
       encarCreatedAt: c.RegisterDate ? new Date(c.RegisterDate) : null,
       encarUpdatedAt: c.ModifiedDate  ? new Date(c.ModifiedDate) : null,
     };
   }
 
-  // ── Detail API хариу (нэмэлт талбарууд) ──
-  _transformFromEncarDetail(c) {
-    const base = this._transformFromEncar(c);
-
-    // Detail-д илүү нарийн field-үүд байдаг
-    const rawFuel   = c.FuelType || c.fueltype || c.Fuel || base.fuelType || '';
-    const rawTrans  = c.Transmission || c.transmission || c.Gear || base.transmission || '';
-    const rawColor  = c.Color || c.color || c.ColorName || base.color;
-    const rawEngine = c.EngineCapacity || c.engineCapacity || c.displacement ||
-                      (base.engineSize ? parseInt(base.engineSize) : null);
-
-    // Features (Options array)
-    let features = [];
-    if (Array.isArray(c.Options)) {
-      features = c.Options.map(o => o.name || o.Name || String(o)).filter(Boolean);
-    } else if (Array.isArray(c.options)) {
-      features = c.options.map(o => o.name || String(o)).filter(Boolean);
-    }
-
+  _transformDetail(c) {
+    const base = this._transform(c);
     return {
       ...base,
-      fuelType:     mapFuel(rawFuel)   || base.fuelType,
-      transmission: mapTrans(rawTrans) || base.transmission,
-      color:        rawColor           || base.color,
-      engineSize:   rawEngine ? `${rawEngine}cc` : base.engineSize,
-      doors:        c.Door   || c.door   || base.doors,
-      seats:        c.Seat   || c.seat   || base.seats,
-      features,
+      fuelType:     mapFuel(c.FuelType || c.Fuel || '')      || base.fuelType,
+      transmission: mapTrans(c.Transmission || c.Gear || '')  || base.transmission,
+      color:        mapColor(c.Color || c.ColorName || '')    || base.color,
+      engineSize:   c.EngineCapacity ? `${c.EngineCapacity}cc` : base.engineSize,
+      doors:        c.Door || base.doors,
+      seats:        c.Seat || base.seats,
+      features:     mapFeatures(c.Options || c.options || []),
       description:  c.Description || c.description || base.description,
-      dealer: {
-        ...base.dealer,
-        phone: c.OfficeTelNo || c.SellerPhone || base.dealer?.phone || null,
-      },
     };
   }
 
-  // Alias — syncService дуудна
-  transformVehicle(v) {
-    return this._transformFromEncar(v);
-  }
+  transformVehicle(v) { return this._transform(v); }
 
   async getBrands() {
-    return { success: true, data: Object.values(BRAND_MAP).map(n => ({ id: n, name: n })) };
+    return {
+      success: true,
+      data: [...new Set(Object.values(T.brands))].map(n => ({ id: n, name: n })),
+    };
   }
 
-  async getModelsByBrand() { return { success: true, data: [] }; }
+  async getModelsByBrand()  { return { success: true, data: [] }; }
+  async getPriceHistory()   { return { success: true, data: { price_history: [], trend: 'stable' } }; }
+  async getDealers()        { return { success: true, data: [] }; }
 
   async getMarketStats() {
     try {
@@ -480,9 +393,6 @@ class EncarService {
       return { success: true, data: { total_vehicles: r.data?.Count || 0 } };
     } catch { return { success: true, data: { total_vehicles: 0 } }; }
   }
-
-  async getPriceHistory() { return { success: true, data: { price_history: [], trend: 'stable' } }; }
-  async getDealers()      { return { success: true, data: [] }; }
 
   _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
