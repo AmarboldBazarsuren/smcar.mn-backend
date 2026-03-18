@@ -88,26 +88,26 @@ logger.info(`Static files: /uploads → ${uploadDir}`);
 // ─────────────────────────────────────────
 // RATE LIMITING
 // ─────────────────────────────────────────
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max:      200,
-  message:  { success: false, message: 'Хэт олон хүсэлт. 15 минутын дараа дахин оролдоно уу.' },
-  standardHeaders: true,
-  legacyHeaders:   false,
-  handler: (req, res, next, options) => {
-    logger.warn(`Rate limit хэтэрлээ — IP: ${req.ip} | URL: ${req.url}`);
-    res.status(429).json(options.message);
-  },
-});
+// const generalLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000,
+//   max:      200,
+//   message:  { success: false, message: 'Хэт олон хүсэлт. 15 минутын дараа дахин оролдоно уу.' },
+//   standardHeaders: true,
+//   legacyHeaders:   false,
+//   handler: (req, res, next, options) => {
+//     logger.warn(`Rate limit хэтэрлээ — IP: ${req.ip} | URL: ${req.url}`);
+//     res.status(429).json(options.message);
+//   },
+// });
 
-const adminLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max:      100,
-  message:  { success: false, message: 'Admin: хэт олон хүсэлт.' },
-});
+// const adminLimiter = rateLimit({
+//   windowMs: 15 * 60 * 1000,
+//   max:      100,
+//   message:  { success: false, message: 'Admin: хэт олон хүсэлт.' },
+// });
 
-app.use('/api/', generalLimiter);
-app.use('/api/admin/', adminLimiter);
+// app.use('/api/', generalLimiter);
+// app.use('/api/admin/', adminLimiter);
 
 // ─────────────────────────────────────────
 // ROUTES
