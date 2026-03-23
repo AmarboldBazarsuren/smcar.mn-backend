@@ -44,10 +44,12 @@ const app = express();
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
+  process.env.FRONTEND_URL  || 'http://localhost:3000',
+  process.env.FRONTEND_URL_2,
+  process.env.FRONTEND_URL_3,
   'http://localhost:3001',
   'http://localhost:5173',
-];
+].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
